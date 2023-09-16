@@ -116,4 +116,10 @@ class WalletController:
 
         balance = await cls._get_balance(address)
         balance = await cls._wei_to_ether(balance) if balance else balance
-        return WalletWithBalance(balance=balance, **wallet.__dict__)
+        return WalletWithBalance(
+            address=wallet.address,
+            private_key=wallet.private_key,
+            mnemonic=wallet.mnemonic,
+            leaf=wallet.leaf,
+            balance=balance,
+        )

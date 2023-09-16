@@ -25,7 +25,7 @@ async def create_wallet_view(data: WalletCreate) -> WalletDetail:
 async def wallets_view(limit: int = 20, offset: int = 0) -> WalletList:
     async with async_session() as session:
         result = await session.execute(select(Wallet).order_by(Wallet.id).limit(limit).offset(offset))
-        return WalletList(root=[WalletDetail(**wallet.__dict__) for wallet in result.scalars().all()])
+        return WalletList(result.scalars().all())
 
 
 @router.get(

@@ -1,12 +1,13 @@
 from typing import List, Optional
 
 from _decimal import Decimal
-from pydantic import BaseModel, RootModel, computed_field
+from pydantic import BaseModel, RootModel, computed_field, ConfigDict
 
 from app.config import settings
 
 
 class WalletDetail(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     address: str
     private_key: str
     mnemonic: str
