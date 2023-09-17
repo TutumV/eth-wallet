@@ -94,3 +94,8 @@ async def wallets(session):
         async with s.begin():
             s.add_all(data)
     return data
+
+
+@pytest_asyncio.fixture(scope="function")
+async def wallet(wallets):
+    return wallets[0]

@@ -14,7 +14,9 @@ class Settings(BaseSettings):
     database_port: str
     database_name: str
 
-    explorer_url: str
+    explorer_address_url: str
+    explorer_transaction_url: str
+    chain_id: int
     node_url: str
     project_name: str
     model_config = SettingsConfigDict(env_file=f"{BASE_DIR}/.env")

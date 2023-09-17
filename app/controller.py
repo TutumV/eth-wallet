@@ -1,6 +1,7 @@
 from typing import Optional
 
 from _decimal import Decimal
+from aiohttp import ClientResponseError
 from eth44.crypto import HDKey as HDKeyEthereum
 from eth44.crypto import HDPrivateKey
 from eth_utils.units import units
@@ -10,17 +11,32 @@ from web3 import AsyncHTTPProvider, AsyncWeb3
 
 from app.config import settings
 from app.core.database import async_session
-from app.core.exception import AddressNotValidException, WalletNotFoundException
+from app.core.exception import (
+    AddressNotValidException,
+    InsufficientFundsException,
+    NodeException,
+    TargetWalletNotValidException,
+    WalletNotFoundException,
+)
 from app.model import Wallet
-from app.schemas import WalletCreate, WalletDetail, WalletWithBalance
+from app.schemas import (
+    WalletCreate,
+    WalletDetail,
+    WalletSend,
+    WalletSendResult,
+    WalletWithBalance,
+)
 
 
 class WalletController:
     HD_PATH = "m/44'/60'/0'"
     DEFAULT_ACCOUNT = 0
 
+    def __init__(self):
+        self.w3 = self._get_provider()
+
     @classmethod
-    async def _get_provider(cls) -> AsyncWeb3:
+    def _get_provider(cls) -> AsyncWeb3:
         provider = AsyncHTTPProvider(settings.node_url)
         return AsyncWeb3(provider=provider)
 
@@ -42,15 +58,13 @@ class WalletController:
         master_key = HDPrivateKey.master_key_from_mnemonic(mnemonic=mnemonic)
         return HDKeyEthereum.from_path(master_key, cls.HD_PATH)
 
-    @classmethod
-    async def _generate_wallet_data(cls, root_key, mnemonic, leaf=0) -> dict:
-        w3 = await cls._get_provider()
+    async def _generate_wallet_data(self, root_key, mnemonic, leaf=0) -> dict:
         keys = HDKeyEthereum.from_path(
-            root_key=root_key, path='{account}/{leaf}'.format(account=cls.DEFAULT_ACCOUNT, leaf=leaf)
+            root_key=root_key, path='{account}/{leaf}'.format(account=self.DEFAULT_ACCOUNT, leaf=leaf)
         )
         private_key = keys[-1]
         address = private_key.public_key.address()
-        checksum_address = w3.to_checksum_address(address)
+        checksum_address = self.w3.to_checksum_address(address)
         data = {
             "address": checksum_address,
             "private_key": private_key._key.to_hex(),
@@ -59,37 +73,30 @@ class WalletController:
         }
         return data
 
-    @classmethod
-    async def create(cls, data: WalletCreate) -> WalletDetail:
+    async def create(self, data: WalletCreate) -> WalletDetail:
         if data.mnemonic:
             mnemonic = data.mnemonic
-            leaf = await cls._get_next_leaf(mnemonic=data.mnemonic)
+            leaf = await self._get_next_leaf(mnemonic=data.mnemonic)
         else:
-            mnemonic = await cls._generate_mnemonic()
+            mnemonic = await self._generate_mnemonic()
             leaf = 0
 
-        root_keys = await cls._get_root_key(mnemonic=mnemonic)
-        wallet = await cls._generate_wallet_data(root_key=root_keys[-1], mnemonic=mnemonic, leaf=leaf)
+        root_keys = await self._get_root_key(mnemonic=mnemonic)
+        wallet = await self._generate_wallet_data(root_key=root_keys[-1], mnemonic=mnemonic, leaf=leaf)
 
         async with async_session() as session:
             async with session.begin():
                 session.add(Wallet(**wallet))
         return WalletDetail(**wallet)
 
-    @classmethod
-    async def _validate_address(cls, address) -> None:
-        w3 = await cls._get_provider()
-        if not w3.is_address(address):
-            raise AddressNotValidException()
+    async def _address_is_valid(self, address) -> bool:
+        return self.w3.is_address(address)
 
-    @classmethod
-    async def _get_balance(cls, address) -> Optional[int]:
-        w3 = await cls._get_provider()
-        if await w3.is_connected() is False:
-            balance = None
-        else:
-            balance = await w3.eth.get_balance(address)
-        return balance
+    async def _get_balance(self, address) -> Optional[int]:
+        try:
+            return await self.w3.eth.get_balance(address)
+        except ClientResponseError:
+            raise NodeException()
 
     @classmethod
     async def _wei_to_ether(cls, wei) -> Decimal:
@@ -97,29 +104,104 @@ class WalletController:
         this method don't use w3.from_wei because it return Union[int, Decimal)
         """
         ether = wei / units.get('ether')
-        return Decimal(value=ether)
+        return Decimal(ether)
 
     @classmethod
-    async def get_wallet_with_balance(cls, address):
+    async def _get_wallet(cls, address):
+        async with async_session() as session:
+            result = await session.execute(select(Wallet).filter(Wallet.address == address))
+            return result.scalar_one_or_none()
+
+    async def get_wallet_with_balance(self, address):
         """
         validate the address
         get an account
         get the balance in wei, then convert it to ether
         """
-        await cls._validate_address(address=address)
+        is_valid = await self._address_is_valid(address=address)
+        if not is_valid:
+            raise AddressNotValidException()
 
-        async with async_session() as session:
-            result = await session.execute(select(Wallet).filter(Wallet.address == address))
-            wallet = result.scalar_one_or_none()
-            if wallet is None:
-                raise WalletNotFoundException()
+        wallet = await self._get_wallet(address)
+        if not wallet:
+            raise WalletNotFoundException()
 
-        balance = await cls._get_balance(address)
-        balance = await cls._wei_to_ether(balance) if balance else balance
+        wei_balance = await self._get_balance(address)
+        ether_balance = await self._wei_to_ether(wei_balance)
         return WalletWithBalance(
             address=wallet.address,
             private_key=wallet.private_key,
             mnemonic=wallet.mnemonic,
             leaf=wallet.leaf,
-            balance=balance,
+            balance=ether_balance,
         )
+
+    async def _gas_price(self):
+        try:
+            return await self.w3.eth.gas_price
+        except ClientResponseError:
+            raise NodeException()
+
+    async def _gas_count(self, from_, to_, amount):
+        try:
+            return await self.w3.eth.estimate_gas({'to': to_, 'from': from_, 'value': amount})
+        except ClientResponseError:
+            raise NodeException()
+
+    async def _send_raw_transaction(self, from_, to_, amount, private_key, gas, gas_price):
+        try:
+            nonce = await self.w3.eth.get_transaction_count(from_)
+            signed_txn = self.w3.eth.account.sign_transaction(
+                dict(
+                    nonce=nonce,
+                    gas=gas,
+                    gasPrice=gas_price,
+                    to=to_,
+                    value=amount,
+                    data=b'',
+                    chainId=settings.chain_id,
+                ),
+                private_key=private_key,
+            )
+            result = await self.w3.eth.send_raw_transaction(signed_txn.rawTransaction)
+            return result.hex()
+        except (ClientResponseError, ValueError):
+            raise NodeException()
+
+    async def send(self, address, data: WalletSend):
+        # validate from_ to_ addresses
+        from_is_valid = await self._address_is_valid(address=address)
+        if not from_is_valid:
+            raise AddressNotValidException()
+        to_is_valid = await self._address_is_valid(address=data.to)
+        if not to_is_valid:
+            raise TargetWalletNotValidException()
+        # get wallet data
+        wallet = await self._get_wallet(address)
+        if not wallet:
+            raise WalletNotFoundException()
+        # get balance
+        wei_balance = await self._get_balance(address)
+        ether_balance = await self._wei_to_ether(wei_balance)
+        # calculate fee
+        amount = self.w3.to_wei(data.amount, 'ether')
+        gas_count = await self._gas_count(from_=address, to_=data.to, amount=amount)
+        gas_price = await self._gas_price()
+        wei_fee = gas_count * gas_price
+        ether_fee = await self._wei_to_ether(wei_fee)
+        # check balance
+        if wei_balance < (amount + wei_fee):
+            raise InsufficientFundsException(
+                available=ether_balance,
+                required=ether_fee + data.amount,
+            )
+        # create and send raw tx
+        tx_id = await self._send_raw_transaction(
+            from_=address,
+            to_=data.to,
+            gas=gas_count,
+            gas_price=gas_price,
+            amount=amount,
+            private_key=wallet.private_key,
+        )
+        return WalletSendResult(transaction_id=tx_id)
