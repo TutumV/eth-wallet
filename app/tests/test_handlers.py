@@ -113,7 +113,7 @@ async def test_send_client_error(client, wallet):
 
 
 async def test_send_invalid_from(client):
-    response = await client.post(f'/wallet/123/send', json={"to": "123", "amount": "1"})
+    response = await client.post('/wallet/123/send', json={"to": "123", "amount": "1"})
 
     assert response.status_code == 400
     assert response.json()['detail'] == "From Address Not Valid"
@@ -144,7 +144,7 @@ async def test_send_insufficient_funds_fee(client, wallet):
 
 async def test_send_wallet_not_found(client):
     response = await client.post(
-        f'/wallet/0x0af880Ed1dF24Cd35BCA3c9fbD45A5586200e7Cb/send',
+        '/wallet/0x0af880Ed1dF24Cd35BCA3c9fbD45A5586200e7Cb/send',
         json={"to": '0x0af880Ed1dF24Cd35BCA3c9fbD45A5586200e7Cb', "amount": "1"},
     )
 

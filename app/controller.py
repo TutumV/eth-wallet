@@ -2,8 +2,8 @@ from typing import Optional
 
 from _decimal import Decimal
 from aiohttp import ClientResponseError
-from eth44.crypto import HDKey as HDKeyEthereum
-from eth44.crypto import HDPrivateKey
+from eth44.tools import Wallet as WalletData
+from eth44.tools import create_wallet
 from eth_utils.units import units
 from mnemonic import Mnemonic
 from sqlalchemy import select
@@ -53,25 +53,10 @@ class WalletController:
             wallet = result.scalar_one_or_none()
             return wallet.leaf + 1 if wallet else 0
 
-    @classmethod
-    async def _get_root_key(cls, mnemonic) -> list:
-        master_key = HDPrivateKey.master_key_from_mnemonic(mnemonic=mnemonic)
-        return HDKeyEthereum.from_path(master_key, cls.HD_PATH)
-
-    async def _generate_wallet_data(self, root_key, mnemonic, leaf=0) -> dict:
-        keys = HDKeyEthereum.from_path(
-            root_key=root_key, path='{account}/{leaf}'.format(account=self.DEFAULT_ACCOUNT, leaf=leaf)
-        )
-        private_key = keys[-1]
-        address = private_key.public_key.address()
-        checksum_address = self.w3.to_checksum_address(address)
-        data = {
-            "address": checksum_address,
-            "private_key": private_key._key.to_hex(),
-            "leaf": leaf,
-            "mnemonic": mnemonic,
-        }
-        return data
+    async def _generate_wallet_data(self, mnemonic, leaf=0) -> WalletData:
+        wallet: WalletData = create_wallet(mnemonic=mnemonic, leaf=leaf)
+        wallet.address = self.w3.to_checksum_address(wallet.address)
+        return wallet
 
     async def create(self, data: WalletCreate) -> WalletDetail:
         if data.mnemonic:
@@ -81,13 +66,21 @@ class WalletController:
             mnemonic = await self._generate_mnemonic()
             leaf = 0
 
-        root_keys = await self._get_root_key(mnemonic=mnemonic)
-        wallet = await self._generate_wallet_data(root_key=root_keys[-1], mnemonic=mnemonic, leaf=leaf)
+        wallet = await self._generate_wallet_data(mnemonic=mnemonic, leaf=leaf)
 
         async with async_session() as session:
             async with session.begin():
-                session.add(Wallet(**wallet))
-        return WalletDetail(**wallet)
+                session.add(
+                    Wallet(
+                        address=wallet.address,
+                        leaf=wallet.leaf,
+                        mnemonic=wallet.mnemonic,
+                        private_key=wallet.private_key,
+                    )
+                )
+        return WalletDetail(
+            address=wallet.address, private_key=wallet.private_key, mnemonic=wallet.mnemonic, leaf=wallet.leaf
+        )
 
     async def _address_is_valid(self, address) -> bool:
         return self.w3.is_address(address)
