@@ -6,13 +6,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
-    database_uri: str
-    database_engine: str
-    database_user: str
-    database_password: str
-    database_host: str
-    database_port: str
-    database_name: str
+    postgres_uri: str
+    postgres_engine: str
+    postgres_user: str
+    postgres_password: str
+    postgres_host: str
+    postgres_port: str
+    postgres_name: str
 
     explorer_address_url: str
     explorer_transaction_url: str

@@ -20,7 +20,7 @@ def event_loop(request):
 
 @pytest.fixture
 def engine():
-    return create_async_engine(settings.database_uri)
+    return create_async_engine(settings.postgres_uri)
 
 
 @pytest.fixture
@@ -32,13 +32,13 @@ def session(engine):
 async def setup_database():
     conn = await asyncpg.connect(
         database="postgres",
-        user=settings.database_user,
-        password=settings.database_password,
-        host=settings.database_host,
-        port=settings.database_port,
+        user=settings.postgres_user,
+        password=settings.postgres_password,
+        host=settings.postgres_host,
+        port=settings.postgres_port,
     )
-    await conn.execute(f'DROP DATABASE IF EXISTS "{settings.database_name}"')
-    await conn.execute(f'CREATE DATABASE "{settings.database_name}" OWNER "{settings.database_user}"')
+    await conn.execute(f'DROP DATABASE IF EXISTS "{settings.postgres_name}"')
+    await conn.execute(f'CREATE DATABASE "{settings.postgres_name}" OWNER "{settings.postgres_user}"')
 
 
 @pytest_asyncio.fixture(scope="function")
