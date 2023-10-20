@@ -152,7 +152,7 @@ class WalletController:
                     to=to_,
                     value=amount,
                     data=b'',
-                    chainId=settings.chain_id,
+                    chainId=1,
                 ),
                 private_key=private_key,
             )

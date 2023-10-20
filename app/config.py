@@ -16,7 +16,6 @@ class Settings(BaseSettings):
 
     explorer_address_url: str
     explorer_transaction_url: str
-    chain_id: int
     node_url: str
     project_name: str
     model_config = SettingsConfigDict(env_file=f"{BASE_DIR}/.env")
